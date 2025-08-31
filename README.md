@@ -1,4 +1,3 @@
-
 -----
 
 # ⚡ Advanced API Permissions Scanner v7
@@ -33,16 +32,17 @@ O scanner faz parsing heurístico (regex-based) em services/repos/controllers e 
 
 ```
 advanced-api-permissions-scanner/
+├─ package.json
+├─ README.md
 ├─ backend/
+│  ├─ tsconfig.json
 │  ├─ src/
 │  │  ├─ analyzers/      # nodeAnalyzer.ts, javaAnalyzer.ts
 │  │  ├─ utils/          # fileParser.ts, ormDetectors.ts
 │  │  └─ server.ts
-│  ├─ package.json
-│  └─ tsconfig.json
-└─ frontend/
-   ├─ index.html
-   └─ script.js
+├─ frontend/
+│  ├─ index.html
+│  └─ script.js
 ```
 
 > **Observação:** o repositório que você criar pode ter nomes/paths ligeiramente diferentes — ajuste os `docker-compose`/Dockerfile conforme necessário.
