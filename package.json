@@ -1,0 +1,24 @@
+{
+  "name": "advanced-api-permissions-scanner-backend",
+  "version": "7.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch backend/src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.11",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.4.5"
+  }
+}
