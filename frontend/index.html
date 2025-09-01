@@ -12,6 +12,8 @@
         nav button.active,nav button:hover{background:#00ff7f;color:#000}
         section{display:none;padding:18px}
         section.active{display:block}
+        h2.section-header { display: flex; justify-content: space-between; align-items: center; }
+        .file-count { font-size: 0.9em; font-weight: normal; background-color: #333; color: #00ff7f; padding: 4px 10px; border-radius: 12px; }
         .upload{border:2px dashed #00ff7f;border-radius:10px;padding:18px;text-align:center;margin:8px 0}
         .upload.dragover{background:rgba(0,255,127,.08)}
         .btn{background:#00ff7f;color:#000;border:0;border-radius:8px;padding:10px 16px;cursor:pointer;font-weight:700;margin-right:8px}
@@ -40,7 +42,10 @@
 </nav>
 
 <section id="arquivos" class="active">
-    <h2>Services / Repositories / Controllers</h2>
+    <h2 class="section-header">
+        Services / Repositories / Controllers
+        <span class="file-count" id="services-count">0 arquivo(s)</span>
+    </h2>
     <div class="upload" id="drop-services">
         Arraste e solte aqui, ou
         <input id="inp-services" type="file" multiple style="display:none">
@@ -50,7 +55,10 @@
 </section>
 
 <section id="models">
-    <h2>Models / Entities</h2>
+    <h2 class="section-header">
+        Models / Entities
+        <span class="file-count" id="models-count">0 arquivo(s)</span>
+    </h2>
     <div class="upload" id="drop-models">
         Arraste e solte aqui, ou
         <input id="inp-models" type="file" multiple style="display:none">
@@ -60,7 +68,7 @@
 </section>
 
 <section id="config">
-    <h2>Configurações</h2>
+    <h2 class="section-header">Configurações</h2>
     <label>Banco default:</label>
     <select id="defaultDb">
         <option value="sqlserver">sqlserver</option>
@@ -73,7 +81,7 @@
 </section>
 
 <section id="resultados">
-    <h2>Resultados</h2>
+    <h2 class="section-header">Resultados</h2>
     <div class="filters">
         <select id="f-banco">
             <option value="">Todos os Bancos</option>

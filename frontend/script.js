@@ -18,6 +18,11 @@ let lastResults = [];
 let sortBy = 'model';
 let sortOrder = 'asc';
 
+function updateFileCounts() {
+    document.getElementById('services-count').textContent = `${svc.files.length} arquivo(s)`;
+    document.getElementById('models-count').textContent = `${mdl.files.length} arquivo(s)`;
+}
+
 function addFiles(target, listEl, flist) {
     for (const f of flist) {
         if (!target.files.some(x=>x.name===f.name && x.size===f.size)) {
@@ -28,10 +33,12 @@ function addFiles(target, listEl, flist) {
             row.querySelector('.rm').onclick=()=>{
                 target.files = target.files.filter(z=>z!==f);
                 row.remove();
+                updateFileCounts(); // Atualiza ao remover
             };
             listEl.appendChild(row);
         }
     }
+    updateFileCounts(); // Atualiza ao adicionar
 }
 
 function setupDrop(id, target, listEl) {
@@ -57,7 +64,7 @@ document.getElementById('btn-analyze').onclick = async () => {
     for (const f of svc.files) fd.append('services', f);
     for (const f of mdl.files) fd.append('models', f);
     fd.append('defaultDb', document.getElementById('defaultDb').value);
-    fd.append('postgresConnName', document.getElementById('pgConn').value || ''); // O nome do campo permanece o mesmo no backend
+    fd.append('postgresConnName', document.getElementById('pgConn').value || '');
     bar.style.width = '40%';
     const resp = await fetch('http://localhost:3000/analyze', { method:'POST', body: fd });
     bar.style.width = '80%';
@@ -129,7 +136,6 @@ document.querySelectorAll('th.sortable').forEach(th => {
     };
 });
 
-// --- NOVA LÓGICA PARA ATUALIZAR A LABEL DINAMICAMENTE ---
 const defaultDbSelect = document.getElementById('defaultDb');
 const connNameLabel = document.getElementById('conn-name-label');
 const connNameInput = document.getElementById('pgConn');
@@ -139,14 +145,14 @@ function updateConnNameField() {
     if (selectedDb === 'sqlserver') {
         connNameLabel.textContent = 'Nome da conexão Postgres (@InjectConnection):';
         connNameInput.placeholder = 'ex.: postgres_db';
-    } else { // Caso postgres seja o default
+    } else {
         connNameLabel.textContent = 'Nome da conexão SQL Server (@InjectConnection):';
         connNameInput.placeholder = 'ex.: sqlserver_db';
     }
 }
 
-// Adiciona o evento de mudança
 defaultDbSelect.onchange = updateConnNameField;
 
-// Executa uma vez ao carregar a página para garantir o estado inicial correto
+// Inicializa os contadores e campos dinâmicos
 updateConnNameField();
+updateFileCounts();
