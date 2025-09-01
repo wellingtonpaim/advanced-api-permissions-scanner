@@ -1,101 +1,110 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>⚡ Advanced API Permissions Scanner v7</title>
-<style>
-  body{background:#111;color:#eee;font-family:Arial;margin:0}
-  header{background:#000;color:#00ff7f;padding:16px;font-weight:bold;text-align:center}
-  nav{display:flex;background:#1e1e1e}
-  nav button{flex:1;padding:12px;border:0;background:#1e1e1e;color:#ddd;cursor:pointer}
-  nav button.active,nav button:hover{background:#00ff7f;color:#000}
-  section{display:none;padding:18px}
-  section.active{display:block}
-  .upload{border:2px dashed #00ff7f;border-radius:10px;padding:18px;text-align:center;margin:8px 0}
-  .upload.dragover{background:rgba(0,255,127,.08)}
-  .btn{background:#00ff7f;color:#000;border:0;border-radius:8px;padding:10px 16px;cursor:pointer;font-weight:700;margin-right:8px}
-  .list{background:#222;border-radius:6px;padding:6px;max-height:220px;overflow:auto}
-  .row{display:flex;justify-content:space-between;border-bottom:1px solid #333;padding:6px 4px}
-  .rm{color:#f55;cursor:pointer}
-  table{width:100%;border-collapse:collapse;margin-top:10px}
-  th,td{border-bottom:1px solid #333;padding:8px;text-align:left}
-  th{background:#00ff7f;color:#000}
-  .filters{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
-  .filters input,.filters select{background:#222;color:#fff;border:1px solid #555;border-radius:6px;padding:6px}
-  .progress{height:8px;background:#333;border-radius:6px;overflow:hidden;margin:8px 0}
-  .bar{height:100%;width:0;background:#00ff7f;transition:width .2s}
-</style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>⚡ Advanced API Permissions Scanner v7</title>
+    <style>
+        body{background:#111;color:#eee;font-family:Arial;margin:0}
+        header{background:#000;color:#00ff7f;padding:16px;font-weight:bold;text-align:center}
+        nav{display:flex;background:#1e1e1e}
+        nav button{flex:1;padding:12px;border:0;background:#1e1e1e;color:#ddd;cursor:pointer}
+        nav button.active,nav button:hover{background:#00ff7f;color:#000}
+        section{display:none;padding:18px}
+        section.active{display:block}
+        .upload{border:2px dashed #00ff7f;border-radius:10px;padding:18px;text-align:center;margin:8px 0}
+        .upload.dragover{background:rgba(0,255,127,.08)}
+        .btn{background:#00ff7f;color:#000;border:0;border-radius:8px;padding:10px 16px;cursor:pointer;font-weight:700;margin-right:8px}
+        .list{background:#222;border-radius:6px;padding:6px;max-height:220px;overflow:auto}
+        .row{display:flex;justify-content:space-between;border-bottom:1px solid #333;padding:6px 4px}
+        .rm{color:#f55;cursor:pointer}
+        table{width:100%;border-collapse:collapse;margin-top:10px}
+        th,td{border-bottom:1px solid #333;padding:8px;text-align:left}
+        th{background:#00ff7f;color:#000}
+        th.sortable { cursor: pointer; }
+        th.sortable:hover { background: #00e673; }
+        .filters{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+        .filters input,.filters select{background:#222;color:#fff;border:1px solid #555;border-radius:6px;padding:6px}
+        .table-count { margin-top: 12px; font-weight: bold; }
+        .progress{height:8px;background:#333;border-radius:6px;overflow:hidden;margin:8px 0}
+        .bar{height:100%;width:0;background:#00ff7f;transition:width .2s}
+    </style>
 </head>
 <body>
 <header>⚡ Advanced API Permissions Scanner v7</header>
 <nav>
-  <button class="tab active" data-tab="arquivos">📂 Arquivos</button>
-  <button class="tab" data-tab="models">📦 Models</button>
-  <button class="tab" data-tab="config">⚙ Configurações</button>
-  <button class="tab" data-tab="resultados">📊 Resultados</button>
+    <button class="tab active" data-tab="arquivos">📂 Arquivos</button>
+    <button class="tab" data-tab="models">📦 Models</button>
+    <button class="tab" data-tab="config">⚙ Configurações</button>
+    <button class="tab" data-tab="resultados">📊 Resultados</button>
 </nav>
 
 <section id="arquivos" class="active">
-  <h2>Services / Repositories / Controllers</h2>
-  <div class="upload" id="drop-services">
-    Arraste e solte aqui, ou
-    <input id="inp-services" type="file" multiple style="display:none">
-    <button class="btn" onclick="document.getElementById('inp-services').click()">Escolher Arquivos</button>
-  </div>
-  <div class="list" id="list-services"></div>
+    <h2>Services / Repositories / Controllers</h2>
+    <div class="upload" id="drop-services">
+        Arraste e solte aqui, ou
+        <input id="inp-services" type="file" multiple style="display:none">
+        <button class="btn" onclick="document.getElementById('inp-services').click()">Escolher Arquivos</button>
+    </div>
+    <div class="list" id="list-services"></div>
 </section>
 
 <section id="models">
-  <h2>Models / Entities</h2>
-  <div class="upload" id="drop-models">
-    Arraste e solte aqui, ou
-    <input id="inp-models" type="file" multiple style="display:none">
-    <button class="btn" onclick="document.getElementById('inp-models').click()">Escolher Models</button>
-  </div>
-  <div class="list" id="list-models"></div>
+    <h2>Models / Entities</h2>
+    <div class="upload" id="drop-models">
+        Arraste e solte aqui, ou
+        <input id="inp-models" type="file" multiple style="display:none">
+        <button class="btn" onclick="document.getElementById('inp-models').click()">Escolher Models</button>
+    </div>
+    <div class="list" id="list-models"></div>
 </section>
 
 <section id="config">
-  <h2>Configurações</h2>
-  <label>Banco default:</label>
-  <select id="defaultDb">
-    <option value="sqlserver">sqlserver</option>
-    <option value="postgres">postgres</option>
-  </select>
-  <br><br>
-  <label>Nome da conexão Postgres (@InjectConnection):</label>
-  <input id="pgConn" placeholder="ex.: postgres_db">
-  <div class="progress"><div class="bar" id="bar"></div></div>
+    <h2>Configurações</h2>
+    <label>Banco default:</label>
+    <select id="defaultDb">
+        <option value="sqlserver">sqlserver</option>
+        <option value="postgres">postgres</option>
+    </select>
+    <br><br>
+    <label>Nome da conexão Postgres (@InjectConnection):</label>
+    <input id="pgConn" placeholder="ex.: postgres_db">
+    <div class="progress"><div class="bar" id="bar"></div></div>
 </section>
 
 <section id="resultados">
-  <h2>Resultados</h2>
-  <div class="filters">
-    <select id="f-banco">
-      <option value="">Todos os Bancos</option>
-      <option value="sqlserver">sqlserver</option>
-      <option value="postgres">postgres</option>
-    </select>
-    <select id="f-perm">
-      <option value="">Todas Permissões</option>
-      <option>SELECT</option><option>INSERT</option><option>UPDATE</option><option>DELETE</option><option>REFERENCES</option>
-    </select>
-    <input id="f-text" placeholder="Buscar por tabela ou model">
-  </div>
-  <table>
-    <thead>
-      <tr><th>Model</th><th>Tabela</th><th>Permissão</th><th>Banco</th><th>Origem</th></tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
-  <br>
-  <button class="btn" id="btn-analyze">🔍 Analisar</button>
-  <button class="btn" id="btn-reset">♻ Resetar</button>
-  <button class="btn" id="btn-csv">📥 Exportar CSV</button>
+    <h2>Resultados</h2>
+    <div class="filters">
+        <select id="f-banco">
+            <option value="">Todos os Bancos</option>
+            <option value="sqlserver">sqlserver</option>
+            <option value="postgres">postgres</option>
+        </select>
+        <select id="f-perm">
+            <option value="">Todas Permissões</option>
+            <option>SELECT</option><option>INSERT</option><option>UPDATE</option><option>DELETE</option><option>REFERENCES</option>
+        </select>
+        <input id="f-text" placeholder="Buscar por tabela ou model">
+    </div>
+    <div class="table-count" id="table-count-container">Tabelas distintas mapeadas: <span id="table-count">0</span></div>
+    <table>
+        <thead>
+        <tr>
+            <th data-sort="model" class="sortable">Model</th>
+            <th data-sort="table" class="sortable">Tabela</th>
+            <th data-sort="permission" class="sortable">Permissão</th>
+            <th>Banco</th>
+            <th>Origem</th>
+        </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+    </table>
+    <br>
+    <button class="btn" id="btn-analyze">🔍 Analisar</button>
+    <button class="btn" id="btn-reset">♻ Resetar</button>
+    <button class="btn" id="btn-csv">📥 Exportar CSV</button>
 </section>
 
 <script src="./script.js"></script>
 </body>
 </html>
-
