@@ -67,7 +67,7 @@
         <option value="postgres">postgres</option>
     </select>
     <br><br>
-    <label>Nome da conexão Postgres (@InjectConnection):</label>
+    <label id="conn-name-label">Nome da conexão Postgres (@InjectConnection):</label>
     <input id="pgConn" placeholder="ex.: postgres_db">
     <div class="progress"><div class="bar" id="bar"></div></div>
 </section>
@@ -94,7 +94,7 @@
             <th data-sort="table" class="sortable">Tabela</th>
             <th data-sort="permission" class="sortable">Permissão</th>
             <th>Banco</th>
-            <th>Origem</th>
+            <th>Origens</th>
         </tr>
         </thead>
         <tbody id="tbody"></tbody>

@@ -15,8 +15,8 @@ const mdlList = document.getElementById('list-models');
 const bar = document.getElementById('bar');
 const tbody = document.getElementById('tbody');
 let lastResults = [];
-let sortBy = 'model'; // Coluna de ordenação padrão
-let sortOrder = 'asc';  // Ordem padrão
+let sortBy = 'model';
+let sortOrder = 'asc';
 
 function addFiles(target, listEl, flist) {
     for (const f of flist) {
@@ -57,7 +57,7 @@ document.getElementById('btn-analyze').onclick = async () => {
     for (const f of svc.files) fd.append('services', f);
     for (const f of mdl.files) fd.append('models', f);
     fd.append('defaultDb', document.getElementById('defaultDb').value);
-    fd.append('postgresConnName', document.getElementById('pgConn').value || '');
+    fd.append('postgresConnName', document.getElementById('pgConn').value || ''); // O nome do campo permanece o mesmo no backend
     bar.style.width = '40%';
     const resp = await fetch('http://localhost:3000/analyze', { method:'POST', body: fd });
     bar.style.width = '80%';
@@ -72,8 +72,8 @@ document.getElementById('btn-reset').onclick = () => { lastResults = []; render(
 document.getElementById('btn-csv').onclick = () => {
     if (!lastResults.length) return;
     const rows = filtered();
-    let csv = 'Model,Tabela,Permissao,Banco,Origem\n';
-    rows.forEach(r => { csv += `${r.model},${r.table},${r.permission},${r.banco},${r.origem}\n`; });
+    let csv = 'Model,Tabela,Permissao,Banco,Origens\n';
+    rows.forEach(r => { csv += `"${r.model}","${r.table}","${r.permission}","${r.banco}","${r.origem}"\n`; });
     const blob = new Blob([csv], {type:'text/csv'});
     const url = URL.createObjectURL(blob);
     const a = Object.assign(document.createElement('a'), { href:url, download:'permissions.csv' });
@@ -97,11 +97,9 @@ function filtered() {
 function render() {
     const rows = filtered();
 
-    // Calcula e exibe o número de tabelas distintas
     const distinctTables = new Set(rows.map(r => r.table));
     document.getElementById('table-count').innerText = distinctTables.size;
 
-    // Ordena os resultados
     rows.sort((a, b) => {
         const valA = a[sortBy] ? a[sortBy].toLowerCase() : '';
         const valB = b[sortBy] ? b[sortBy].toLowerCase() : '';
@@ -118,7 +116,6 @@ function render() {
     });
 }
 
-// Adiciona eventos de clique para ordenação
 document.querySelectorAll('th.sortable').forEach(th => {
     th.onclick = () => {
         const newSortBy = th.dataset.sort;
@@ -131,3 +128,25 @@ document.querySelectorAll('th.sortable').forEach(th => {
         render();
     };
 });
+
+// --- NOVA LÓGICA PARA ATUALIZAR A LABEL DINAMICAMENTE ---
+const defaultDbSelect = document.getElementById('defaultDb');
+const connNameLabel = document.getElementById('conn-name-label');
+const connNameInput = document.getElementById('pgConn');
+
+function updateConnNameField() {
+    const selectedDb = defaultDbSelect.value;
+    if (selectedDb === 'sqlserver') {
+        connNameLabel.textContent = 'Nome da conexão Postgres (@InjectConnection):';
+        connNameInput.placeholder = 'ex.: postgres_db';
+    } else { // Caso postgres seja o default
+        connNameLabel.textContent = 'Nome da conexão SQL Server (@InjectConnection):';
+        connNameInput.placeholder = 'ex.: sqlserver_db';
+    }
+}
+
+// Adiciona o evento de mudança
+defaultDbSelect.onchange = updateConnNameField;
+
+// Executa uma vez ao carregar a página para garantir o estado inicial correto
+updateConnNameField();
