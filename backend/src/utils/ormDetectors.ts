@@ -1,6 +1,6 @@
 export type ModelInfo = {
-    modelName: string;
-    tableName?: string;
+    modelName: string;         // ex: OrderModel, ClientEntity
+    tableName?: string;        // ex: Pedidos, clientes
     dbHint?: 'sqlserver' | 'postgres';
     relations?: Array<{ via: string; target: string; joinTable?: string }>;
 };
@@ -10,18 +10,19 @@ export type PermissionRow = {
     table: string;
     permission: 'SELECT'|'INSERT'|'UPDATE'|'DELETE'|'REFERENCES';
     banco: 'sqlserver' | 'postgres';
-    origem: string;
+    origem: string; // Será uma string combinada, ex: "orm, sql"
     file?: string;
 };
 
 export type AnalyzeOptions = {
     defaultDb: 'sqlserver'|'postgres';
-    secondaryConnName?: string; // Alterado de postgresConnName
+    secondaryConnName?: string;
 };
 
 export function mergeRows(rows: PermissionRow[]): PermissionRow[] {
     const map = new Map<string, PermissionRow & { origens: Set<string> }>();
-    const key = (r: PermissionRow) => `${r.table}|${r.permission}|${r.banco}`;
+    // A chave agora usa toLowerCase() no nome da tabela para agrupar sem diferenciar maiúsculas/minúsculas.
+    const key = (r: PermissionRow) => `${r.table.toLowerCase()}|${r.permission}|${r.banco}`;
 
     for (const currentRow of rows) {
         const k = key(currentRow);
@@ -34,6 +35,7 @@ export function mergeRows(rows: PermissionRow[]): PermissionRow[] {
             if (existingRow.model === '-' && currentRow.model !== '-') {
                 existingRow.model = currentRow.model;
             }
+            // Mantém a primeira capitalização encontrada para o nome da tabela.
         }
     }
 
@@ -48,5 +50,6 @@ export function mergeRows(rows: PermissionRow[]): PermissionRow[] {
             file: mergedRow.file
         });
     }
+
     return finalRows;
 }

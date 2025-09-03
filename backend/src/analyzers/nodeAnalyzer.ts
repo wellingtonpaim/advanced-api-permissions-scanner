@@ -1,17 +1,11 @@
 import { AnalyzeOptions, ModelInfo, PermissionRow } from "../utils/ormDetectors";
 
 const RX = {
-    // ... (regexes existentes)
     tableSequelizeTs: /@Table\s*\(\s*\{[^}]*?\btableName\s*:\s*['"`]([^'"`]+)['"`][\s\S]*?\}\s*\)/g,
     className: /export\s+class\s+(\w+)/g,
     entityTypeORM: /@Entity\s*\(\s*(?:['"`]([^'"`]+)['"`]|\{\s*name\s*:\s*['"`]([^'"`]+)['"`][\s\S]*?\})\s*\)/g,
     prismaModelUse: /prisma\.(\w+)\.(findMany|findFirst|create|update|delete|upsert|aggregate|groupBy)/g,
-    sequelizeCalls: /\.(findAll|findOne|findAndCountAll|create|update|destroy|bulkCreate)\s*\(/g,
-    typeormRepoCalls: /\.(find|findOne|findAndCount|save|insert|update|delete|remove|softDelete)\s*\(/g,
-    sqlSelect: /\bSELECT\b[\s\S]+?\bFROM\b\s+([a-zA-Z0-9_"[\].]+)/gi,
-    sqlInsert: /\bINSERT\s+INTO\b\s+([a-zA-Z0-9_"[\].]+)/gi,
-    sqlUpdate: /\bUPDATE\b\s+([a-zA-Z0-9_"[\].]+)/gi,
-    sqlDelete: /\bDELETE\s+FROM\b\s+([a-zA-Z0-9_"[\].]+)/gi,
+    sqlTables: /(?:FROM|JOIN)\s+([a-zA-Z0-9_."\[\]]+)/gi,
     injectConnNamed: /@InjectConnection\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
     sequelizeForRoot: /SequelizeModule\.forRoot\(\s*\{[\s\S]*?dialect\s*:\s*['"`](postgres|mssql)['"`][\s\S]*?\}\s*\)/g
 };
@@ -23,7 +17,6 @@ function mapDialectToDb(dialect?: string): 'postgres'|'sqlserver'|undefined {
 }
 
 export function analyzeNodeModels(text: string, fileName: string): ModelInfo[] {
-    // ... (função sem alterações)
     const models: ModelInfo[] = [];
     const classNames: string[] = [];
     let m: RegExpExecArray | null;
@@ -72,18 +65,14 @@ export function analyzeNodeServices(
 ): PermissionRow[] {
     const rows: PermissionRow[] = [];
 
-    // Lógica de detecção do banco
     let banco: 'sqlserver'|'postgres' = opts.defaultDb;
     let m: RegExpExecArray | null;
     const injectNames: string[] = [];
     while ((m = RX.injectConnNamed.exec(text))) injectNames.push(m[1]);
 
-    // Se o arquivo usa uma conexão nomeada que bate com a conexão SECUNDÁRIA...
     if (opts.secondaryConnName && injectNames.includes(opts.secondaryConnName)) {
-        // ...então o banco deste arquivo é o OPOSTO do default.
         banco = opts.defaultDb === 'sqlserver' ? 'postgres' : 'sqlserver';
     } else {
-        // Senão, tenta a heurística do SequelizeModule.forRoot
         const root = RX.sequelizeForRoot.exec(text);
         if (root) {
             const db = mapDialectToDb(root[1]);
@@ -91,61 +80,79 @@ export function analyzeNodeServices(
         }
     }
 
-    // O restante da análise continua...
     for (const model of allModels) {
-        const nameGuess = model.modelName;
-        const modelUsage = new RegExp(`\\b${nameGuess}\\b`, "g");
-        if (!modelUsage.test(text)) continue;
+        const className = model.modelName;
 
-        let match: RegExpExecArray | null;
-        const opMatches = [...text.matchAll(RX.sequelizeCalls), ...text.matchAll(RX.typeormRepoCalls)];
-        for (const op of opMatches) {
-            const verb = op[1].toLowerCase();
-            let perm: PermissionRow["permission"] | undefined;
-            if (/(find|count)/.test(verb)) perm = 'SELECT';
-            if (/create|save|insert|bulkcreate/.test(verb)) perm = 'INSERT';
-            if (/update/.test(verb)) perm = 'UPDATE';
-            if (/destroy|delete|remove|softdelete/.test(verb)) perm = 'DELETE';
-            if (perm) {
-                rows.push({
-                    model: model.modelName,
-                    table: model.tableName ?? model.modelName,
-                    permission: perm,
-                    banco,
-                    origem: 'orm',
-                    file: fileName
-                });
-            }
+        const variableNames = new Set<string>();
+        const injectionRegex = new RegExp(`@InjectModel\\(\\s*${className}\\s*\\)\\s+(?:private|public|protected)?\\s*(?:readonly)?\\s+(\\w+)\\s*:`, "g");
+
+        let match;
+        while ((match = injectionRegex.exec(text)) !== null) {
+            if (match[1]) variableNames.add(match[1]);
         }
-        while ((match = RX.prismaModelUse.exec(text))) {
-            // ... (código do prisma sem alterações)
+
+        if (variableNames.size === 0) {
+            const conventionalVarName = className.charAt(0).toLowerCase() + className.slice(1);
+            variableNames.add(conventionalVarName);
         }
+
+        const allVarNamesPattern = [...variableNames].join('|');
+        const modelPattern = `\\b(this\\.(?:${allVarNamesPattern})|${className})\\b`;
+
+        const findRegex = new RegExp(`${modelPattern}\\.(findAll|findOne|findAndCountAll|findAndCount|find)`, "g");
+        const createRegex = new RegExp(`${modelPattern}\\.(create|save|insert|bulkCreate)`, "g");
+        const updateRegex = new RegExp(`${modelPattern}\\.(update)`, "g");
+        const deleteRegex = new RegExp(`${modelPattern}\\.(destroy|delete|remove|softDelete)`, "g");
+
+        if (findRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'SELECT', banco, origem: 'orm', file: fileName });
+        if (createRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'INSERT', banco, origem: 'orm', file: fileName });
+        if (updateRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'UPDATE', banco, origem: 'orm', file: fileName });
+        if (deleteRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'DELETE', banco, origem: 'orm', file: fileName });
+
+        const includeRegex = new RegExp(`\\bmodel:\\s*${className}\\b`, "g");
+        if (includeRegex.test(text)) {
+            rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'SELECT', banco, origem: 'orm', file: fileName });
+        }
+
         for (const rel of model.relations ?? []) {
             if (rel.joinTable) {
-                rows.push({
-                    model: model.modelName,
-                    table: rel.joinTable,
-                    permission: 'REFERENCES',
-                    banco,
-                    origem: 'relationship',
-                    file: fileName
-                });
+                rows.push({ model: model.modelName, table: rel.joinTable, permission: 'REFERENCES', banco, origem: 'relationship', file: fileName });
             }
         }
     }
 
-    let sm: RegExpExecArray | null;
-    while ((sm = RX.sqlSelect.exec(text))) {
-        rows.push({ model: '-', table: cleanTable(sm[1]), permission: 'SELECT', banco, origem: 'sql', file: fileName });
-    }
-    while ((sm = RX.sqlInsert.exec(text))) {
-        rows.push({ model: '-', table: cleanTable(sm[1]), permission: 'INSERT', banco, origem: 'sql', file: fileName });
-    }
-    while ((sm = RX.sqlUpdate.exec(text))) {
-        rows.push({ model: '-', table: cleanTable(sm[1]), permission: 'UPDATE', banco, origem: 'sql', file: fileName });
-    }
-    while ((sm = RX.sqlDelete.exec(text))) {
-        rows.push({ model: '-', table: cleanTable(sm[1]), permission: 'DELETE', banco, origem: 'sql', file: fileName });
+    // --- LÓGICA SQL NATIVO REFINADA ---
+    const sqlStringsRegex = /`([\s\S]+?)`/g;
+    const commonNoise = new Set(['src', 'rxjs', 'node', 'mongoose', 'axios', '..', '.']);
+    let sqlMatch;
+
+    // 1. Itera apenas sobre o conteúdo dentro de `backticks`.
+    while ((sqlMatch = sqlStringsRegex.exec(text)) !== null) {
+        const sqlQueryText = sqlMatch[1];
+
+        // 2. Encontra os CTEs apenas dentro da query atual.
+        const cteNames = new Set<string>();
+        const cteRegex = /(?:\bWITH|,)\s+([\w\d_]+)\s+AS\s*\(/gi;
+        let cteMatch;
+        while ((cteMatch = cteRegex.exec(sqlQueryText)) !== null) {
+            cteNames.add(cleanTable(cteMatch[1]));
+        }
+
+        // 3. Encontra todas as tabelas em FROM/JOIN dentro da query.
+        let tableMatch;
+        while ((tableMatch = RX.sqlTables.exec(sqlQueryText)) !== null) {
+            const table = cleanTable(tableMatch[1]);
+
+            // 4. Adiciona a permissão somente se não for um CTE e não for "ruído".
+            if (!cteNames.has(table) && !commonNoise.has(table.toLowerCase())) {
+                let permission: PermissionRow['permission'] = 'SELECT'; // Default para queries complexas.
+                if (/\bUPDATE\b/i.test(sqlQueryText)) permission = 'UPDATE';
+                if (/\bINSERT\s+INTO\b/i.test(sqlQueryText)) permission = 'INSERT';
+                if (/\bDELETE\s+FROM\b/i.test(sqlQueryText)) permission = 'DELETE';
+
+                rows.push({ model: '-', table, permission, banco, origem: 'sql', file: fileName });
+            }
+        }
     }
 
     return rows;
