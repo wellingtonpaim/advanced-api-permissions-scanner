@@ -1,25 +1,15 @@
 import { AnalyzeOptions, ModelInfo, PermissionRow } from "../utils/ormDetectors";
 
 const RX = {
-    // sequelize-typescript: @Table({ tableName: 'Pedidos' })
     tableSequelizeTs: /@Table\s*\(\s*\{[^}]*?\btableName\s*:\s*['"`]([^'"`]+)['"`][\s\S]*?\}\s*\)/g,
     className: /export\s+class\s+(\w+)/g,
-    // TypeORM: @Entity('clientes') | @Entity({name:'clientes'})
     entityTypeORM: /@Entity\s*\(\s*(?:['"`]([^'"`]+)['"`]|\{\s*name\s*:\s*['"`]([^'"`]+)['"`][\s\S]*?\})\s*\)/g,
-    // Prisma client rough calls
     prismaModelUse: /prisma\.(\w+)\.(findMany|findFirst|create|update|delete|upsert|aggregate|groupBy)/g,
-
-    // --- REGEX MELHORADA PARA SQL NATIVO ---
-    // Captura todas as tabelas de cláusulas FROM e JOIN
     sqlTables: /(?:FROM|JOIN)\s+([a-zA-Z0-9_."\[\]]+)/gi,
-
-    // Nest InjectConnection
     injectConnNamed: /@InjectConnection\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
-    // SequelizeModule.forRoot({ dialect:'postgres' ... name:'postgres_db' })
     sequelizeForRoot: /SequelizeModule\.forRoot\(\s*\{[\s\S]*?dialect\s*:\s*['"`](postgres|mssql)['"`][\s\S]*?\}\s*\)/g
 };
 
-// quick helper
 function mapDialectToDb(dialect?: string): 'postgres'|'sqlserver'|undefined {
     if (!dialect) return;
     if (dialect.toLowerCase().includes('postgres')) return 'postgres';
@@ -131,25 +121,37 @@ export function analyzeNodeServices(
         }
     }
 
-    // --- LÓGICA SQL CORRIGIDA E FINALIZADA ---
+    // --- LÓGICA SQL NATIVO REFINADA ---
+    const sqlStringsRegex = /`([\s\S]+?)`/g;
+    const commonNoise = new Set(['src', 'rxjs', 'node', 'mongoose', 'axios', '..', '.']);
+    let sqlMatch;
 
-    // 1. Encontra todos os nomes de CTEs definidos no arquivo.
-    const cteNames = new Set<string>();
-    const cteRegex = /(?:\bWITH|,)\s+([\w\d_]+)\s+AS\s*\(/gi;
-    let cteMatch;
-    while ((cteMatch = cteRegex.exec(text)) !== null) {
-        cteNames.add(cleanTable(cteMatch[1]));
-    }
+    // 1. Itera apenas sobre o conteúdo dentro de `backticks`.
+    while ((sqlMatch = sqlStringsRegex.exec(text)) !== null) {
+        const sqlQueryText = sqlMatch[1];
 
-    // 2. Usa a nova regex para encontrar TODAS as tabelas em cláusulas FROM e JOIN.
-    let tableMatch;
-    while ((tableMatch = RX.sqlTables.exec(text)) !== null) {
-        const table = cleanTable(tableMatch[1]);
-        // 3. Adiciona a tabela apenas se ela não for um CTE.
-        if (!cteNames.has(table)) {
-            // Por padrão, uma menção em SQL nativo será SELECT.
-            // Casos de INSERT/UPDATE/DELETE precisam ser mais explícitos e podem ser tratados separadamente se necessário.
-            rows.push({ model: '-', table, permission: 'SELECT', banco, origem: 'sql', file: fileName });
+        // 2. Encontra os CTEs apenas dentro da query atual.
+        const cteNames = new Set<string>();
+        const cteRegex = /(?:\bWITH|,)\s+([\w\d_]+)\s+AS\s*\(/gi;
+        let cteMatch;
+        while ((cteMatch = cteRegex.exec(sqlQueryText)) !== null) {
+            cteNames.add(cleanTable(cteMatch[1]));
+        }
+
+        // 3. Encontra todas as tabelas em FROM/JOIN dentro da query.
+        let tableMatch;
+        while ((tableMatch = RX.sqlTables.exec(sqlQueryText)) !== null) {
+            const table = cleanTable(tableMatch[1]);
+
+            // 4. Adiciona a permissão somente se não for um CTE e não for "ruído".
+            if (!cteNames.has(table) && !commonNoise.has(table.toLowerCase())) {
+                let permission: PermissionRow['permission'] = 'SELECT'; // Default para queries complexas.
+                if (/\bUPDATE\b/i.test(sqlQueryText)) permission = 'UPDATE';
+                if (/\bINSERT\s+INTO\b/i.test(sqlQueryText)) permission = 'INSERT';
+                if (/\bDELETE\s+FROM\b/i.test(sqlQueryText)) permission = 'DELETE';
+
+                rows.push({ model: '-', table, permission, banco, origem: 'sql', file: fileName });
+            }
         }
     }
 
