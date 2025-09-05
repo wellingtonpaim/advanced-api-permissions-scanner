@@ -1,86 +1,170 @@
 import { AnalyzeOptions, ModelInfo, PermissionRow } from "../utils/ormDetectors";
 
-const RX = {
-  entity: /@Entity\s*(?:\(\s*(?:name\s*=\s*)?["']([^"']+)["']\s*\))?/g,
-  table: /@Table\s*\(\s*(?:name\s*=\s*)?["']([^"']+)["']\s*\)/g,
-  className: /public\s+class\s+(\w+)/g,
-  repoCalls: /\.(findAll|findById|findOne|save|saveAll|delete|deleteAll|deleteById|update)\s*\(/g,
-  // @Query("select ... from Tabela t ...")
-  queryAnnotation: /@Query\s*\(\s*["'`](.+?)["'`]\s*\)/gs,
-  sqlSelect: /\bselect\b[\s\S]+?\bfrom\b\s+([a-zA-Z0-9_."[\]]+)/gi,
-  sqlInsert: /\binsert\s+into\b\s+([a-zA-Z0-9_."[\]]+)/gi,
-  sqlUpdate: /\bupdate\b\s+([a-zA-Z0-9_."[\]]+)/gi,
-  sqlDelete: /\bdelete\s+from\b\s+([a-zA-Z0-9_."[\]]+)/gi
-};
+const entityTableRegex = /@Table\s*\(\s*name\s*=\s*["']([^"']+)["']\s*\)[\s\S]*?public\s+class\s+(\w+)/g;
+const relationshipRegex = /@(ManyToOne|OneToMany|ManyToMany|OneToOne)[\s\S]*?(?:private|public|protected)?\s+([\w\d<>]+)\s+\w+\s*;/g;
+const joinTableRegex = /@JoinTable\s*\(\s*name\s*=\s*"([^"]+)"/;
 
-export function analyzeJavaModels(text: string): ModelInfo[] {
-  const res: ModelInfo[] = [];
-  const classes: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = RX.className.exec(text))) classes.push(m[1]);
-
-  // entity/table
-  const tableNames: string[] = [];
-  while ((m = RX.table.exec(text))) tableNames.push(m[1]);
-  const entityNames: string[] = [];
-  while ((m = RX.entity.exec(text))) entityNames.push(m[1]);
-
-  // map naive: first class with first table/entity name
-  for (let i = 0; i < classes.length; i++) {
-    const modelName = classes[i];
-    const tableName = tableNames[i] || entityNames[i];
-    if (tableName) res.push({ modelName, tableName, relations: [] });
-  }
-  return res;
+function getGenericType(type: string): string {
+    const genericMatch = /<(\w+)>/.exec(type);
+    return genericMatch ? genericMatch[1] : type;
 }
 
-export function analyzeJavaServices(
-  text: string,
-  fileName: string,
-  allModels: ModelInfo[],
-  opts: AnalyzeOptions
-): PermissionRow[] {
-  const rows: PermissionRow[] = [];
-  const banco = opts.defaultDb; // se precisar, dá pra inferir por configs spring em outra etapa
+export function analyzeJavaModels(text: string): ModelInfo[] {
+    const res: ModelInfo[] = [];
+    let m: RegExpExecArray | null;
 
-  // repo calls simples
-  const repoOps = [...text.matchAll(RX.repoCalls)];
-  for (const op of repoOps) {
-    const verb = op[1].toLowerCase();
-    let perm: PermissionRow["permission"] | undefined;
-    if (/find/.test(verb)) perm = 'SELECT';
-    if (/save/.test(verb)) perm = 'INSERT';
-    if (/update/.test(verb)) perm = 'UPDATE';
-    if (/delete/.test(verb)) perm = 'DELETE';
-    if (perm) {
-      rows.push({ model: '-', table: '-', permission: perm, banco, origem: 'orm', file: fileName });
+    while ((m = entityTableRegex.exec(text))) {
+        const tableName = m[1];
+        const modelName = m[2];
+        const relations: ModelInfo['relations'] = [];
+
+        const classBodyStart = text.indexOf(modelName);
+        const classBodyEnd = text.indexOf('}', classBodyStart);
+        const classBody = text.substring(classBodyStart, classBodyEnd);
+
+        let relMatch;
+        while ((relMatch = relationshipRegex.exec(classBody)) !== null) {
+            const annotationText = relMatch[0];
+            let joinTable: string | undefined;
+            if (relMatch[1] === 'ManyToMany') {
+                const joinTableMatch = joinTableRegex.exec(annotationText);
+                if (joinTableMatch && joinTableMatch[1]) {
+                    joinTable = joinTableMatch[1];
+                }
+            }
+            relations.push({ via: relMatch[1], target: relMatch[2], joinTable });
+        }
+
+        if (tableName && modelName) {
+            res.push({ modelName, tableName, relations });
+        }
     }
-  }
+    return res;
+}
 
-  // @Query JPQL/SQL
-  let qm: RegExpExecArray | null;
-  while ((qm = RX.queryAnnotation.exec(text))) {
-    const sql = qm[1];
-    pushSqlDerived(rows, sql, banco, fileName);
-  }
+function addSelectWithRelations(model: ModelInfo, allModels: ModelInfo[], rows: PermissionRow[], banco: 'sqlserver' | 'postgres', file: string, origem: 'orm' | 'relationship') {
+    rows.push({ model: model.modelName, table: model.tableName, permission: 'SELECT', banco, origem, file });
+    model.relations?.forEach(rel => {
+        const targetType = getGenericType(rel.target);
+        const relatedModel = allModels.find(m => m.modelName === targetType);
+        if (relatedModel) {
+            rows.push({ model: relatedModel.modelName, table: relatedModel.tableName, permission: 'SELECT', banco, origem: 'relationship', file });
+        }
+    });
+}
 
-  // SQL literais
-  pushSqlDerived(rows, text, banco, fileName);
 
-  return rows;
+export function analyzeJavaServices(
+    text: string,
+    fileName: string,
+    allModels: ModelInfo[],
+    opts: AnalyzeOptions
+): PermissionRow[] {
+    const rows: PermissionRow[] = [];
+    const banco = opts.defaultDb;
+
+    pushSqlDerived(rows, text, banco, fileName);
+
+    for (const model of allModels) {
+        const entityNameRoot = model.modelName.replace(/Entity$/, '');
+        const repoClassName = `${entityNameRoot}Repository`;
+
+        const variableNames = new Set<string>();
+        const declarationRegex = new RegExp(`(?:@Autowired\\s+)?(?:private|public)?\\s*(?:final)?\\s*${repoClassName}\\s+(\\w+)`, "g");
+        let declMatch;
+        while ((declMatch = declarationRegex.exec(text))) {
+            variableNames.add(declMatch[1]);
+        }
+        if (variableNames.size === 0) {
+            variableNames.add(repoClassName.charAt(0).toLowerCase() + repoClassName.slice(1));
+        }
+
+        for (const varName of variableNames) {
+            // CORREÇÃO: .save() e semelhantes agora geram INSERT e UPDATE
+            if (new RegExp(`\\b${varName}\\.(save|saveAll|persist)\\b`).test(text)) {
+                rows.push({ model: model.modelName, table: model.tableName, permission: 'INSERT', banco, origem: 'orm', file: fileName });
+                rows.push({ model: model.modelName, table: model.tableName, permission: 'UPDATE', banco, origem: 'orm', file: fileName });
+            }
+            if (new RegExp(`\\b${varName}\\.(find|get|exists|count|read|query|search|stream)\\b`).test(text)) {
+                addSelectWithRelations(model, allModels, rows, banco, fileName, 'orm');
+            }
+            if (new RegExp(`\\b${varName}\\.(delete|remove)\\b`).test(text)) {
+                rows.push({ model: model.modelName, table: model.tableName, permission: 'DELETE', banco, origem: 'orm', file: fileName });
+            }
+        }
+    }
+
+    const repoInterfaceRegex = /public\s+interface\s+(\w+Repository)\s+extends\s+JpaRepository<(\w+)/g;
+    let repoMatch;
+    while ((repoMatch = repoInterfaceRegex.exec(text)) !== null) {
+        const entityName = repoMatch[2];
+        const modelInfo = allModels.find(m => m.modelName === entityName);
+        if (!modelInfo) continue;
+
+        const interfaceBodyStart = repoMatch.index;
+        const interfaceBodyEnd = text.indexOf('}', interfaceBodyStart);
+        const interfaceBody = text.substring(interfaceBodyStart, interfaceBodyEnd);
+
+        const methodRegex = /((?:Optional<.+?>|List<.+?>|\w+)\s+(\w+)\(.*\);)/g;
+        let methodMatch;
+        while ((methodMatch = methodRegex.exec(interfaceBody)) !== null) {
+            if (methodMatch[0].includes('@Query')) continue;
+
+            const methodName = methodMatch[2];
+            const selectPrefixes = ['find', 'get', 'read', 'query', 'search', 'count', 'exists', 'stream'];
+            const deletePrefixes = ['delete', 'remove'];
+
+            if (selectPrefixes.some(p => methodName.startsWith(p))) {
+                addSelectWithRelations(modelInfo, allModels, rows, banco, fileName, 'orm');
+            } else if (deletePrefixes.some(p => methodName.startsWith(p))) {
+                rows.push({ model: modelInfo.modelName, table: modelInfo.tableName, permission: 'DELETE', banco, origem: 'orm', file: fileName });
+            }
+        }
+
+        const modifyingRegex = /@Modifying[\s\S]*?@Query\([\s\S]*?value\s*=\s*["'`]([\s\S]+?)["'`][\s\S]*?\)/g;
+        let modMatch;
+        while((modMatch = modifyingRegex.exec(interfaceBody)) !== null) {
+            const query = modMatch[1].replace(/"\s*\+\s*"/g, "");
+            if (query.trim().toUpperCase().startsWith('UPDATE')) {
+                const updateTableMatch = /UPDATE\s+([a-zA-Z0-9_."\[\]]+)/i.exec(query);
+                if (updateTableMatch?.[1]) {
+                    rows.push({ model: '-', table: clean(updateTableMatch[1]), permission: 'UPDATE', banco, origem: 'sql', file: fileName });
+                }
+            }
+        }
+    }
+
+    for (const model of allModels) {
+        model.relations?.forEach(rel => {
+            if (rel.via === 'ManyToMany' && rel.joinTable) {
+                rows.push({ model: model.modelName, table: rel.joinTable, permission: 'REFERENCES', banco, origem: 'relationship', file: fileName });
+            }
+        });
+    }
+
+    return rows;
 }
 
 function pushSqlDerived(rows: PermissionRow[], source: string, banco: any, fileName: string) {
-  let m: RegExpExecArray | null;
-  const RXs = {
-    select: /\bselect\b[\s\S]+?\bfrom\b\s+([a-zA-Z0-9_."[\]]+)/gi,
-    insert: /\binsert\s+into\b\s+([a-zA-Z0-9_."[\]]+)/gi,
-    update: /\bupdate\b\s+([a-zA-Z0-9_."[\]]+)/gi,
-    del: /\bdelete\s+from\b\s+([a-zA-Z0-9_."[\]]+)/gi
-  };
-  while ((m = RXs.select.exec(source))) rows.push({ model:'-', table:clean(m[1]), permission:'SELECT', banco, origem:'sql', file:fileName });
-  while ((m = RXs.insert.exec(source))) rows.push({ model:'-', table:clean(m[1]), permission:'INSERT', banco, origem:'sql', file:fileName });
-  while ((m = RXs.update.exec(source))) rows.push({ model:'-', table:clean(m[1]), permission:'UPDATE', banco, origem:'sql', file:fileName });
-  while ((m = RXs.del.exec(source))) rows.push({ model:'-', table:clean(m[1]), permission:'DELETE', banco, origem:'sql', file:fileName });
+    const cleanedSource = source.replace(/\r\n|\r|\n/g, " ").replace(/"\s*\+\s*"/g, "");
+    let m: RegExpExecArray | null;
+    const tablesInSelects = new Set<string>();
+    const selectTableRegex = /\b(?:FROM|JOIN)\s+([a-zA-Z0-9_."\[\]]+)/gi;
+
+    while ((m = selectTableRegex.exec(cleanedSource))) {
+        tablesInSelects.add(clean(m[1]));
+    }
+    for (const table of tablesInSelects) {
+        rows.push({ model:'-', table, permission:'SELECT', banco, origem:'sql', file:fileName });
+    }
+
+    const insertRegex = /\bINSERT\s+INTO\b\s+([a-zA-Z0-9_."\[\]]+)/gi;
+    const updateRegex = /\bUPDATE\b\s+([a-zA-Z0-9_."\[\]]+)/gi;
+    const deleteRegex = /\bDELETE\s+FROM\b\s+([a-zA-Z0-9_."\[\]]+)/gi;
+
+    while ((m = insertRegex.exec(cleanedSource))) rows.push({ model:'-', table:clean(m[1]), permission:'INSERT', banco, origem:'sql', file:fileName });
+    while ((m = updateRegex.exec(cleanedSource))) rows.push({ model:'-', table:clean(m[1]), permission:'UPDATE', banco, origem:'sql', file:fileName });
+    while ((m = deleteRegex.exec(cleanedSource))) rows.push({ model:'-', table:clean(m[1]), permission:'DELETE', banco, origem:'sql', file:fileName });
 }
-function clean(x:string){ return x.replace(/^[\["]|[\]"]$/g,'').trim(); }
+
+function clean(x:string){ return x.replace(/\(nolock\)/gi, '').replace(/^[\["]|[\]"]$/g,'').trim(); }
