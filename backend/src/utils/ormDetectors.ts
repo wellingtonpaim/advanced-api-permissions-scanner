@@ -1,6 +1,6 @@
 export type ModelInfo = {
-    modelName: string;         // ex: OrderModel, ClientEntity
-    tableName?: string;        // ex: Pedidos, clientes
+    modelName: string;
+    tableName?: string;
     dbHint?: 'sqlserver' | 'postgres';
     relations?: Array<{ via: string; target: string; joinTable?: string }>;
 };
@@ -10,7 +10,7 @@ export type PermissionRow = {
     table: string;
     permission: 'SELECT'|'INSERT'|'UPDATE'|'DELETE'|'REFERENCES';
     banco: 'sqlserver' | 'postgres';
-    origem: string; // Será uma string combinada, ex: "orm, sql"
+    origem: string;
     file?: string;
 };
 
@@ -21,7 +21,7 @@ export type AnalyzeOptions = {
 
 export function mergeRows(rows: PermissionRow[]): PermissionRow[] {
     const map = new Map<string, PermissionRow & { origens: Set<string> }>();
-    // A chave agora usa toLowerCase() no nome da tabela para agrupar sem diferenciar maiúsculas/minúsculas.
+    // A chave continua case-insensitive para o agrupamento
     const key = (r: PermissionRow) => `${r.table.toLowerCase()}|${r.permission}|${r.banco}`;
 
     for (const currentRow of rows) {
@@ -29,13 +29,13 @@ export function mergeRows(rows: PermissionRow[]): PermissionRow[] {
         const existingRow = map.get(k);
 
         if (!existingRow) {
-            map.set(k, { ...currentRow, origens: new Set([currentRow.origem]) });
+            // Padroniza para caixa alta ao inserir pela primeira vez
+            map.set(k, { ...currentRow, table: currentRow.table.toUpperCase(), origens: new Set([currentRow.origem]) });
         } else {
             existingRow.origens.add(currentRow.origem);
             if (existingRow.model === '-' && currentRow.model !== '-') {
                 existingRow.model = currentRow.model;
             }
-            // Mantém a primeira capitalização encontrada para o nome da tabela.
         }
     }
 
@@ -50,6 +50,5 @@ export function mergeRows(rows: PermissionRow[]): PermissionRow[] {
             file: mergedRow.file
         });
     }
-
     return finalRows;
 }
