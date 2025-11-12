@@ -1,6 +1,7 @@
 export type ModelInfo = {
     modelName: string;
     tableName?: string;
+    schema?: string;
     dbHint?: 'sqlserver' | 'postgres';
     relations?: Array<{ via: string; target: string; joinTable?: string }>;
 };
@@ -12,6 +13,7 @@ export type PermissionRow = {
     banco: 'sqlserver' | 'postgres';
     origem: string;
     file?: string;
+    schema?: string;
 };
 
 export type AnalyzeOptions = {
@@ -21,16 +23,15 @@ export type AnalyzeOptions = {
 
 export function mergeRows(rows: PermissionRow[]): PermissionRow[] {
     const map = new Map<string, PermissionRow & { origens: Set<string> }>();
-    // A chave continua case-insensitive para o agrupamento
-    const key = (r: PermissionRow) => `${r.table.toLowerCase()}|${r.permission}|${r.banco}`;
+    const key = (r: PermissionRow) => `${r.schema || ''}.${r.table.toLowerCase()}|${r.permission}|${r.banco}`;
 
     for (const currentRow of rows) {
         const k = key(currentRow);
         const existingRow = map.get(k);
 
         if (!existingRow) {
-            // Padroniza para caixa alta ao inserir pela primeira vez
-            map.set(k, { ...currentRow, table: currentRow.table.toUpperCase(), origens: new Set([currentRow.origem]) });
+            const fullTableName = (currentRow.schema ? `${currentRow.schema.toUpperCase()}.` : '') + currentRow.table.toUpperCase();
+            map.set(k, { ...currentRow, table: fullTableName, origens: new Set([currentRow.origem]) });
         } else {
             existingRow.origens.add(currentRow.origem);
             if (existingRow.model === '-' && currentRow.model !== '-') {

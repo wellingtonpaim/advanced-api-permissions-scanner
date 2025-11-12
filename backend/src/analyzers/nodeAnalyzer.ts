@@ -2,156 +2,164 @@ import { AnalyzeOptions, ModelInfo, PermissionRow } from "../utils/ormDetectors"
 
 const RX = {
     tableSequelizeTs: /@Table\s*\(\s*\{[^}]*?\btableName\s*:\s*['"`]([^'"`]+)['"`][\s\S]*?\}\s*\)/g,
+    schemaSequelizeTs: /schema\s*:\s*['"`]([^'"`]+)['"`]/,
     className: /export\s+class\s+(\w+)/g,
-    entityTypeORM: /@Entity\s*\(\s*(?:['"`]([^'"`]+)['"`]|\{\s*name\s*:\s*['"`]([^'"`]+)['"`][\s\S]*?\})\s*\)/g,
-    prismaModelUse: /prisma\.(\w+)\.(findMany|findFirst|create|update|delete|upsert|aggregate|groupBy)/g,
-    sqlTables: /(?:FROM|JOIN)\s+([a-zA-Z0-9_."\[\]]+)/gi,
     injectConnNamed: /@InjectConnection\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
-    sequelizeForRoot: /SequelizeModule\.forRoot\(\s*\{[\s\S]*?dialect\s*:\s*['"`](postgres|mssql)['"`][\s\S]*?\}\s*\)/g
 };
-
-function mapDialectToDb(dialect?: string): 'postgres'|'sqlserver'|undefined {
-    if (!dialect) return;
-    if (dialect.toLowerCase().includes('postgres')) return 'postgres';
-    if (dialect.toLowerCase().includes('mssql') || dialect.toLowerCase().includes('sqlserver')) return 'sqlserver';
-}
 
 export function analyzeNodeModels(text: string, fileName: string): ModelInfo[] {
     const models: ModelInfo[] = [];
-    const classNames: string[] = [];
     let m: RegExpExecArray | null;
 
-    while ((m = RX.className.exec(text))) classNames.push(m[1]);
-
-    const sequelizeTables: Record<string, string> = {};
     while ((m = RX.tableSequelizeTs.exec(text))) {
-        const table = m[1];
+        const tableAnnotation = m[0];
+        const tableNameMatch = /tableName\s*:\s*['"`]([^'"`]+)['"`]/.exec(tableAnnotation);
+        const schemaMatch = RX.schemaSequelizeTs.exec(tableAnnotation);
+        const tableName = tableNameMatch ? tableNameMatch[1] : undefined;
+        const schema = schemaMatch ? schemaMatch[1] : undefined;
+
         const rest = text.slice(m.index);
         const classMatch = /export\s+class\s+(\w+)/.exec(rest);
-        if (classMatch) sequelizeTables[classMatch[1]] = table;
-    }
 
-    const typeormTables: Record<string, string> = {};
-    while ((m = RX.entityTypeORM.exec(text))) {
-        const t = m[1] || m[2];
-        const rest = text.slice(m.index);
-        const cls = /export\s+class\s+(\w+)/.exec(rest)?.[1];
-        if (t && cls) typeormTables[cls] = t;
-    }
-
-    for (const cls of classNames) {
-        const tableName = sequelizeTables[cls] ?? typeormTables[cls];
-        if (tableName) {
-            models.push({ modelName: cls, tableName, relations: [] });
+        if (tableName && classMatch && classMatch[1]) {
+            models.push({ modelName: classMatch[1], tableName, schema, relations: [] });
         }
-    }
-
-    const relMatches = [...text.matchAll(/@BelongsToMany\s*\(\s*\(\)\s*=>\s*(\w+)[\s\S]*?\(\)\s*=>\s*(\w+)/g)];
-    for (const r of relMatches) {
-        const target = r[1];
-        const join = r[2];
-        const last = models[models.length - 1];
-        if (last) last.relations?.push({ via: 'BelongsToMany', target, joinTable: join });
     }
 
     return models;
 }
 
 export function analyzeNodeServices(
-    text: string,
+    textContent: string,
     fileName: string,
     allModels: ModelInfo[],
     opts: AnalyzeOptions
 ): PermissionRow[] {
     const rows: PermissionRow[] = [];
+    let banco: 'sqlserver' | 'postgres' = opts.defaultDb;
 
-    let banco: 'sqlserver'|'postgres' = opts.defaultDb;
+    const text = textContent.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+
     let m: RegExpExecArray | null;
     const injectNames: string[] = [];
     while ((m = RX.injectConnNamed.exec(text))) injectNames.push(m[1]);
 
     if (opts.secondaryConnName && injectNames.includes(opts.secondaryConnName)) {
         banco = opts.defaultDb === 'sqlserver' ? 'postgres' : 'sqlserver';
-    } else {
-        const root = RX.sequelizeForRoot.exec(text);
-        if (root) {
-            const db = mapDialectToDb(root[1]);
-            if (db) banco = db;
-        }
     }
 
+    // Mapeamento de models que são efetivamente injetados no service
+    const injectedModels = new Map<string, { variableNames: Set<string>, banco: 'sqlserver' | 'postgres' }>();
+
+    // --- ANÁLISE ORM ---
     for (const model of allModels) {
         const className = model.modelName;
+        const injectModelRegex = new RegExp(`@InjectModel\\(\\s*${className}(?:,\\s*['"]([^'"]+)['"])?\\s*\\)`);
+        const injectMatch = injectModelRegex.exec(text);
 
-        const variableNames = new Set<string>();
-        const injectionRegex = new RegExp(`@InjectModel\\(\\s*${className}\\s*\\)\\s+(?:private|public|protected)?\\s*(?:readonly)?\\s+(\\w+)\\s*:`, "g");
-
-        let match;
-        while ((match = injectionRegex.exec(text)) !== null) {
-            if (match[1]) variableNames.add(match[1]);
+        let modelBanco = banco;
+        if (injectMatch && injectMatch[1]) {
+            const connName = injectMatch[1].toLowerCase();
+            if (connName.includes('postgres')) modelBanco = 'postgres';
+            else if (connName.includes('sqlserver')) modelBanco = 'sqlserver';
         }
 
-        if (variableNames.size === 0) {
-            const conventionalVarName = className.charAt(0).toLowerCase() + className.slice(1);
-            variableNames.add(conventionalVarName);
-        }
+        // Se o model é injetado, processa normalmente
+        if (injectMatch) {
+            const variableNames = new Set<string>();
+            const injectionRegex = new RegExp(`@InjectModel\\(\\s*${className}[^)]*\\)\\s+(?:private|public|protected)?\\s*(?:readonly)?\\s+(\\w+)\\s*:`, "g");
 
-        const allVarNamesPattern = [...variableNames].join('|');
-        const modelPattern = `\\b(this\\.(?:${allVarNamesPattern})|${className})\\b`;
+            let match;
+            while ((match = injectionRegex.exec(text)) !== null) {
+                if (match[1]) variableNames.add(match[1]);
+            }
 
-        const findRegex = new RegExp(`${modelPattern}\\.(findAll|findOne|findAndCountAll|findAndCount|find)`, "g");
-        const createRegex = new RegExp(`${modelPattern}\\.(create|save|insert|bulkCreate)`, "g");
-        const updateRegex = new RegExp(`${modelPattern}\\.(update)`, "g");
-        const deleteRegex = new RegExp(`${modelPattern}\\.(destroy|delete|remove|softDelete)`, "g");
+            if (variableNames.size > 0) {
+                injectedModels.set(className, { variableNames, banco: modelBanco });
 
-        if (findRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'SELECT', banco, origem: 'orm', file: fileName });
-        if (createRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'INSERT', banco, origem: 'orm', file: fileName });
-        if (updateRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'UPDATE', banco, origem: 'orm', file: fileName });
-        if (deleteRegex.test(text)) rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'DELETE', banco, origem: 'orm', file: fileName });
+                const allVarNamesPattern = [...variableNames].join('|');
+                const modelPattern = `\\bthis\\.(${allVarNamesPattern})\\b`;
 
-        const includeRegex = new RegExp(`\\bmodel:\\s*${className}\\b`, "g");
-        if (includeRegex.test(text)) {
-            rows.push({ model: model.modelName, table: model.tableName ?? model.modelName, permission: 'SELECT', banco, origem: 'orm', file: fileName });
-        }
-
-        for (const rel of model.relations ?? []) {
-            if (rel.joinTable) {
-                rows.push({ model: model.modelName, table: rel.joinTable, permission: 'REFERENCES', banco, origem: 'relationship', file: fileName });
+                // Análise das operações ORM para models injetados
+                if (new RegExp(`${modelPattern}\\.(findAll|findOne|findAndCountAll|count)`).test(text)) {
+                    rows.push({ model: model.modelName, table: model.tableName, schema: model.schema, permission: 'SELECT', banco: modelBanco, origem: 'orm', file: fileName });
+                }
+                if (new RegExp(`${modelPattern}\\.(create|bulkCreate)`).test(text)) {
+                    rows.push({ model: model.modelName, table: model.tableName, schema: model.schema, permission: 'INSERT', banco: modelBanco, origem: 'orm', file: fileName });
+                }
+                if (new RegExp(`${modelPattern}\\.(update)`).test(text)) {
+                    rows.push({ model: model.modelName, table: model.tableName, schema: model.schema, permission: 'UPDATE', banco: modelBanco, origem: 'orm', file: fileName });
+                }
+                if (new RegExp(`${modelPattern}\\.(destroy)`).test(text)) {
+                    rows.push({ model: model.modelName, table: model.tableName, schema: model.schema, permission: 'DELETE', banco: modelBanco, origem: 'orm', file: fileName });
+                }
             }
         }
     }
 
-    // --- LÓGICA SQL NATIVO REFINADA ---
-    const sqlStringsRegex = /`([\s\S]+?)`/g;
-    const commonNoise = new Set(['src', 'rxjs', 'node', 'mongoose', 'axios', '..', '.']);
-    let sqlMatch;
+    // --- ANÁLISE DE INCLUDES (models referenciados em consultas ORM) ---
+    // Verifica se há pelo menos uma operação ORM válida sendo executada
+    const hasValidOrmOperation = injectedModels.size > 0;
 
-    // 1. Itera apenas sobre o conteúdo dentro de `backticks`.
-    while ((sqlMatch = sqlStringsRegex.exec(text)) !== null) {
-        const sqlQueryText = sqlMatch[1];
+    if (hasValidOrmOperation) {
+        for (const model of allModels) {
+            const className = model.modelName;
 
-        // 2. Encontra os CTEs apenas dentro da query atual.
-        const cteNames = new Set<string>();
-        const cteRegex = /(?:\bWITH|,)\s+([\w\d_]+)\s+AS\s*\(/gi;
-        let cteMatch;
-        while ((cteMatch = cteRegex.exec(sqlQueryText)) !== null) {
-            cteNames.add(cleanTable(cteMatch[1]));
-        }
+            // Só mapeia includes se o model não está injetado (para evitar duplicação)
+            if (!injectedModels.has(className)) {
+                // Verifica se o model é usado em includes de consultas ORM
+                const includePattern = new RegExp(`\\bmodel:\\s*${className}\\b`);
+                if (includePattern.test(text)) {
+                    // Determina o banco baseado no contexto da consulta ou usa o padrão
+                    let modelBanco = banco;
 
-        // 3. Encontra todas as tabelas em FROM/JOIN dentro da query.
-        let tableMatch;
-        while ((tableMatch = RX.sqlTables.exec(sqlQueryText)) !== null) {
-            const table = cleanTable(tableMatch[1]);
+                    // Tenta detectar o banco pela connection do model injetado que está fazendo a consulta
+                    for (const [injectedModelName, injectedInfo] of injectedModels) {
+                        const injectedVarPattern = [...injectedInfo.variableNames].join('|');
+                        const consultaComIncludePattern = new RegExp(`\\bthis\\.(${injectedVarPattern})\\.[^\\n]*?\\bmodel:\\s*${className}\\b`, 's');
+                        if (consultaComIncludePattern.test(text)) {
+                            modelBanco = injectedInfo.banco;
+                            break;
+                        }
+                    }
 
-            // 4. Adiciona a permissão somente se não for um CTE e não for "ruído".
-            if (!cteNames.has(table) && !commonNoise.has(table.toLowerCase())) {
-                let permission: PermissionRow['permission'] = 'SELECT'; // Default para queries complexas.
-                if (/\bUPDATE\b/i.test(sqlQueryText)) permission = 'UPDATE';
-                if (/\bINSERT\s+INTO\b/i.test(sqlQueryText)) permission = 'INSERT';
-                if (/\bDELETE\s+FROM\b/i.test(sqlQueryText)) permission = 'DELETE';
-
-                rows.push({ model: '-', table, permission, banco, origem: 'sql', file: fileName });
+                    rows.push({
+                        model: model.modelName,
+                        table: model.tableName,
+                        schema: model.schema,
+                        permission: 'SELECT',
+                        banco: modelBanco,
+                        origem: 'orm',
+                        file: fileName
+                    });
+                }
             }
+        }
+    }
+
+    // --- ANÁLISE DE SQL NATIVO ---
+    const sequelizeQueryRegex = /this\.sequelize\.query\s*\(\s*`([\s\S]+?)`/g;
+    let sqlMatch;
+    while ((sqlMatch = sequelizeQueryRegex.exec(text)) !== null) {
+        const query = sqlMatch[1];
+
+        const insertRegex = /INSERT\s+INTO\s+([a-zA-Z0-9_."\[\]]+)/gi;
+        const updateRegex = /UPDATE\s+([a-zA-Z0-9_."\[\]]+)/gi;
+        const deleteRegex = /DELETE\s+FROM\s+([a-zA-Z0-9_."\[\]]+)/gi;
+        const selectTablesRegex = /(?:FROM|JOIN)\s+([a-zA-Z0-9_."\[\]]+)/gi;
+
+        let opMatch;
+        while ((opMatch = insertRegex.exec(query)) !== null) {
+            rows.push({ model: '-', table: cleanTable(opMatch[1]), permission: 'INSERT', banco, origem: 'sql', file: fileName });
+        }
+        while ((opMatch = updateRegex.exec(query)) !== null) {
+            rows.push({ model: '-', table: cleanTable(opMatch[1]), permission: 'UPDATE', banco, origem: 'sql', file: fileName });
+        }
+        while ((opMatch = deleteRegex.exec(query)) !== null) {
+            rows.push({ model: '-', table: cleanTable(opMatch[1]), permission: 'DELETE', banco, origem: 'sql', file: fileName });
+        }
+        while ((opMatch = selectTablesRegex.exec(query)) !== null) {
+            rows.push({ model: '-', table: cleanTable(opMatch[1]), permission: 'SELECT', banco, origem: 'sql', file: fileName });
         }
     }
 
@@ -159,5 +167,5 @@ export function analyzeNodeServices(
 }
 
 function cleanTable(raw: string): string {
-    return raw.replace(/^[\[\"]|[\]\"]$/g, "").trim();
+    return raw.replace(/^[\[\"]|[\]\"]$/g, "").replace(/\(NOLOCK\)/i, "").trim();
 }
